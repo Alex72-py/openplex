@@ -1,45 +1,59 @@
 # OpenPlex
 
-A Perplexity-like AI search engine for your terminal. Searches the web, cites sources, and gives you grounded answers — runs on Termux with minimal dependencies.
+> An open-source Perplexity Pro alternative for your terminal.
+
+OpenPlex gives you AI-powered answers grounded in real web results — with citations, source ranking, and a full RAG pipeline. No browser. No subscription. Runs on Termux and Linux with minimal dependencies.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue)]()
+[![Termux](https://img.shields.io/badge/runs%20on-Termux-brightgreen)]()
 
 ---
 
-## Install
+## What It Does
 
-```bash
-# Termux
-pkg install python git
-git clone https://github.com/Alex72-py/OpenPlex.git
-cd OpenPlex
-pip install rich
-python openplex.py
-```
+Most AI chatbots hallucinate because they answer from memory. OpenPlex works like Perplexity Pro:
 
-```bash
-# Linux
-git clone https://github.com/Alex72-py/OpenPlex.git
-cd OpenPlex
-pip3 install rich
-python3 openplex.py
-```
-
-On first run, a setup wizard will ask you to choose a provider and enter your API key.
-
----
-
-## How It Works
+1. Takes your question
+2. Searches the web
+3. Fetches and ranks actual page content
+4. Injects sources into the prompt
+5. Generates a grounded answer with inline citations
 
 ```
 Question → Search → Rank Sources → Inject into Prompt → Generate → Cite → Clean
 ```
 
-OpenPlex implements a simplified version of Perplexity's RAG pipeline. It searches the web, fetches actual page content, ranks sources by relevance, and injects them into the prompt *before* generation — so the model is forced to cite and stay grounded, not hallucinate.
+No hallucinations. Every claim is backed by a real URL.
+
+---
+
+## Install
+
+**Termux (Android)**
+```bash
+pkg install python git
+git clone https://github.com/Alex72-py/openplex.git
+cd openplex
+pip install rich
+python openplex.py
+```
+
+**Linux**
+```bash
+git clone https://github.com/Alex72-py/openplex.git
+cd openplex
+pip3 install rich
+python3 openplex.py
+```
+
+On first run, a setup wizard walks you through choosing a provider and entering your API key.
 
 ---
 
 ## Providers & Models
 
-OpenPlex supports **NVIDIA NIM**, **Google AI Studio**, and **OpenRouter** — all with free tiers.
+All providers have **free tiers** — no paid subscription required.
 
 ### NVIDIA NIM — [build.nvidia.com](https://build.nvidia.com)
 Key format: `nvapi-...` · 1000 free credits on signup
@@ -52,18 +66,17 @@ Key format: `nvapi-...` · 1000 free credits on signup
 | `qwen-2.5-72b` | Qwen 2.5 72B |
 | `mistral-small` | Mistral Small 24B |
 
-### Google AI Studio — [aistudio.google.com](https://aistudio.google.com/app/apikey)
+### Google AI Studio — [aistudio.google.com](https://aistudio.google.com)
 Key format: `AIza...` · 15 req/min free
 
 | Short Name | Model |
 |---|---|
 | `gemini-2.5-flash` | Gemini 2.5 Flash |
 | `gemini-2.0-flash` | Gemini 2.0 Flash |
-| `gemini-2.0-flash-lite` | Gemini 2.0 Flash Lite |
 | `gemini-2.5-pro` | Gemini 2.5 Pro |
 
-### OpenRouter — [openrouter.ai/keys](https://openrouter.ai/keys)
-Key format: `sk-or-...` · Free models marked `:free`
+### OpenRouter — [openrouter.ai](https://openrouter.ai/keys)
+Key format: `sk-or-...` · Free models available
 
 | Short Name | Model |
 |---|---|
@@ -114,13 +127,21 @@ export OPENPLEX_MODEL="models/gemini-2.5-flash"
 
 ## Dependencies
 
-Only `rich` for terminal UI — optional, falls back to plain text. Everything else (`urllib`, `json`, `ssl`, `concurrent.futures`) is Python stdlib. No pip installs required for core functionality.
+Only `rich` for the terminal UI (optional — falls back to plain text). Everything else is Python stdlib. **No pip installs needed for core functionality.**
+
+Config is stored at `~/.openplex/config.json`. Keys are saved per-provider so switching providers doesn't require re-entering them.
 
 ---
 
-## Config
+## Why OpenPlex?
 
-Stored at `~/.openplex/config.json`. Keys are stored per-provider so switching back doesn't require re-entering them.
+| | Perplexity Pro | OpenPlex |
+|---|---|---|
+| Cost | $20/month | Free |
+| Open source | ❌ | ✅ |
+| Runs on Termux | ❌ | ✅ |
+| Bring your own model | ❌ | ✅ |
+| Citation-grounded answers | ✅ | ✅ |
 
 ---
 
