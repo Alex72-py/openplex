@@ -56,7 +56,7 @@ On first run, a setup wizard walks you through choosing a provider and entering 
 All providers have **free tiers** — no paid subscription required.
 
 ### NVIDIA NIM — [build.nvidia.com](https://build.nvidia.com)
-Key format: `nvapi-...` · 1000 free credits on signup
+Key format: `nvapi-...` · Free tier available
 
 | Short Name | Model |
 |---|---|
