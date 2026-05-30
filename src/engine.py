@@ -70,11 +70,11 @@ class AnswerEngine:
         self.last_sources = []
 
     def update_config(self, config):
-        """Update engine config (e.g., after model switch)."""
+        """Update engine config (e.g., after model/provider switch)."""
         self.config = config
 
     def _call_llm(self, messages, temperature=None, max_tokens=None):
-        """Make an LLM call with current config."""
+        """Make an LLM call with current config, passing provider info."""
         return chat_completion(
             base_url=self.config["base_url"],
             api_key=self.config["api_key"],
@@ -82,29 +82,31 @@ class AnswerEngine:
             messages=messages,
             temperature=temperature or self.config["temperature"],
             max_tokens=max_tokens or self.config["max_tokens"],
+            provider=self.config.get("provider"),
         )
 
     def _needs_search(self, message):
         """Determine if a message needs web search or is just conversation."""
         # Short messages that are clearly conversational
         conversational_patterns = [
-            r'^(hi|hello|hey|thanks|thank you|ok|okay|got it|sure|yes|no|bye)',
-            r'^(what do you think|can you explain|tell me more)',
+            r'^(hi|hello|hey|thanks|thank you|ok|okay|got it|sure|bye)',
         ]
         for pattern in conversational_patterns:
             if re.match(pattern, message.lower().strip()):
-                # But "tell me more" might need search if no context
-                if "more" in message.lower() and self.conversation_history:
-                    return True
                 if len(self.conversation_history) == 0:
                     return True
                 return False
 
-        # If it's clearly a question or request for information, search
-        if any(w in message.lower() for w in ["what is", "how to", "why does", "when did", "who is", "where", "latest", "news", "current", "2024", "2025", "2026"]):
+        # Explicit info-seeking keywords → always search
+        if any(w in message.lower() for w in [
+            "what is", "what are", "how to", "how do", "why does", "why is",
+            "when did", "when was", "who is", "who are", "where is", "where are",
+            "latest", "news", "current", "recent", "2024", "2025", "2026",
+            "best", "compare", "difference", "vs", "versus", "review",
+        ]):
             return True
 
-        # Default: use LLM to decide (but only if we have conversation context)
+        # Use LLM to decide if we have conversation context
         if self.conversation_history:
             try:
                 result = self._call_llm(
@@ -150,27 +152,36 @@ class AnswerEngine:
                 max_tokens=200,
             )
 
-            # Parse JSON array from response
-            # Handle cases where model wraps in markdown code block
+            # Parse JSON array from response — strip markdown fences if present
             result = re.sub(r'```json\s*', '', result)
             result = re.sub(r'```\s*', '', result)
             result = result.strip()
 
+            # Extract JSON array even if surrounded by text
+            match = re.search(r'\[.*?\]', result, re.DOTALL)
+            if match:
+                result = match.group(0)
+
             queries = json.loads(result)
             if isinstance(queries, list) and len(queries) > 0:
-                return queries[:4]  # Max 4 sub-queries
+                return [str(q) for q in queries[:4]]
         except (json.JSONDecodeError, APIError, Exception):
             pass
 
-        # Fallback: just use the original question
         return [question]
 
     def _rank_sources(self, sources, query):
         """
         Rank sources by relevance to the query.
-        Simple keyword-based scoring (no ML needed, keeps it lightweight).
+        Keyword-based scoring — no ML needed, keeps it lightweight.
         """
         query_words = set(query.lower().split())
+        # Remove common stop words from scoring
+        stop_words = {"the", "a", "an", "is", "are", "was", "were", "be", "been",
+                      "have", "has", "do", "does", "did", "will", "would", "could",
+                      "should", "may", "might", "shall", "can", "to", "of", "in",
+                      "for", "on", "with", "at", "by", "from", "up", "about", "into"}
+        query_words -= stop_words
 
         for source in sources:
             score = 0
@@ -178,11 +189,11 @@ class AnswerEngine:
 
             # Keyword overlap scoring
             for word in query_words:
-                if len(word) > 3:  # Skip short words
+                if len(word) > 3:
                     count = text.count(word)
-                    score += min(count, 5)  # Cap per-word contribution
+                    score += min(count, 5)
 
-            # Bonus for having actual content
+            # Bonus for having actual fetched content
             if source.get("content"):
                 score += 3
 
@@ -192,9 +203,13 @@ class AnswerEngine:
                 overlap = len(query_words & snippet_words)
                 score += overlap * 2
 
+            # Penalty for known low-quality domains
+            url = source.get("url", "").lower()
+            if any(d in url for d in ["pinterest", "quora.com", "reddit.com/r/memes"]):
+                score = max(0, score - 2)
+
             source["relevance_score"] = score
 
-        # Sort by relevance score descending
         sources.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
         return sources
 
@@ -206,7 +221,6 @@ class AnswerEngine:
         source_blocks = []
         for i, source in enumerate(sources, 1):
             content = source.get("content") or source.get("snippet", "No content available")
-            # Truncate individual sources to keep total context manageable
             if len(content) > 2000:
                 content = content[:2000] + "..."
 
@@ -218,34 +232,28 @@ class AnswerEngine:
 
         sources_text = "\n---\n".join(source_blocks)
 
-        user_prompt = f"""Based on the following sources, answer this question: {question}
-
-SOURCES:
-{sources_text}
-
-INSTRUCTIONS:
-- Cite sources using [1], [2], etc. after each claim
-- Only use information from the sources above
-- If sources disagree, mention both perspectives
-- If information is insufficient, say so
-- Be thorough but concise"""
-
+        user_prompt = (
+            f"Based on the following sources, answer this question: {question}\n\n"
+            f"SOURCES:\n{sources_text}\n\n"
+            f"INSTRUCTIONS:\n"
+            f"- Cite sources using [1], [2], etc. after each claim\n"
+            f"- Only use information from the sources above\n"
+            f"- If sources disagree, mention both perspectives\n"
+            f"- If information is insufficient, say so\n"
+            f"- Be thorough but concise"
+        )
         return user_prompt
 
     def _verify_response(self, response, sources):
         """
-        Basic verification: check that cited source numbers actually exist.
-        Remove citations to non-existent sources.
+        Remove citations to non-existent source numbers.
         """
         max_source = len(sources)
-        # Find all citations like [1], [2], etc.
         citations = re.findall(r'\[(\d+)\]', response)
         for cite in citations:
             num = int(cite)
             if num > max_source or num < 1:
-                # Remove invalid citation
                 response = response.replace(f'[{cite}]', '')
-
         return response
 
     def answer(self, message, deep=False, callback=None):
@@ -258,7 +266,7 @@ INSTRUCTIONS:
             callback: Optional function to call with status updates
 
         Returns:
-            dict with keys: answer, sources, mode ("search" or "chat")
+            dict with keys: answer, sources, mode ("search", "chat", or "error")
         """
         def status(msg):
             if callback:
@@ -268,7 +276,6 @@ INSTRUCTIONS:
         needs_search = self._needs_search(message)
 
         if not needs_search:
-            # Pure conversational response using history
             status("Thinking...")
             messages = self.conversation_history[-10:] + [{"role": "user", "content": message}]
             try:
@@ -283,7 +290,7 @@ INSTRUCTIONS:
         resolved_query = self._resolve_followup(message)
         status(f"Searching: {resolved_query[:60]}...")
 
-        # Step 3: Decompose query (for deep mode or complex questions)
+        # Step 3: Decompose query (deep mode or long questions)
         if deep or len(message.split()) > 10:
             status("Breaking down question...")
             queries = self._decompose_query(resolved_query)
@@ -298,7 +305,6 @@ INSTRUCTIONS:
             sources = search_and_fetch(queries[0], num_results=8, max_content_chars=2500)
 
         if not sources:
-            # Fallback: try a simpler search
             status("Retrying search...")
             sources = search_and_fetch(message, num_results=6, max_content_chars=2000)
 
@@ -313,13 +319,12 @@ INSTRUCTIONS:
         status(f"Analyzing {len(sources)} sources...")
         sources = self._rank_sources(sources, resolved_query)
 
-        # Keep top sources (quality threshold)
         max_sources = self.config.get("max_sources", 8)
         if deep:
             max_sources = min(len(sources), 12)
         sources = sources[:max_sources]
 
-        # Filter out sources with zero relevance
+        # Quality threshold: drop zero-relevance sources
         sources = [s for s in sources if s.get("relevance_score", 0) > 0]
 
         if not sources:
@@ -333,13 +338,10 @@ INSTRUCTIONS:
         status("Generating answer...")
         context_prompt = self._build_context_prompt(sources, resolved_query)
 
-        messages = [
-            {"role": "system", "content": SEARCH_SYSTEM_PROMPT},
-        ]
+        messages = [{"role": "system", "content": SEARCH_SYSTEM_PROMPT}]
 
-        # Add relevant conversation history for context
+        # Add last 2 conversation exchanges for context
         if self.conversation_history:
-            # Only last 2 exchanges to save tokens
             messages.extend(self.conversation_history[-4:])
 
         messages.append({"role": "user", "content": context_prompt})
@@ -349,7 +351,7 @@ INSTRUCTIONS:
         except APIError as e:
             return {"answer": f"Error generating answer: {e}", "sources": sources, "mode": "error"}
 
-        # Step 7: Verify and clean response
+        # Step 7: Verify citations and clean response
         response = self._verify_response(response, sources)
 
         # Update conversation history

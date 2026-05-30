@@ -5,11 +5,11 @@ Handles commands, setup wizard, and orchestrates the answer engine.
 
 import sys
 import os
-import json
 
 from config import (
-    load_config, save_config, AVAILABLE_MODELS,
-    get_model_id, CONFIG_FILE, ensure_dirs
+    load_config, save_config, AVAILABLE_MODELS, PROVIDERS,
+    MODELS_BY_PROVIDER, get_model_id, get_active_provider_models,
+    switch_provider, CONFIG_FILE, ensure_dirs
 )
 from engine import AnswerEngine
 from ui import UI
@@ -17,49 +17,75 @@ from api_client import APIError, validate_api_key
 
 
 def setup_wizard(ui, config):
-    """First-run setup wizard to configure API key and model."""
+    """First-run setup wizard — choose provider and enter API key."""
     ui.info("Welcome to OpenPlex! Let's get you set up.\n")
-    ui.info("You need an NVIDIA NIM API key (free at build.nvidia.com)")
-    ui.info("1. Go to https://build.nvidia.com")
-    ui.info("2. Sign up / Sign in")
-    ui.info("3. Go to Settings → API Keys")
-    ui.info("4. Generate a key (starts with 'nvapi-')\n")
 
+    # Step 1: Choose provider
+    provider_keys = list(PROVIDERS.keys())
+    ui.info("Choose your AI provider:\n")
+    for i, key in enumerate(provider_keys, 1):
+        p = PROVIDERS[key]
+        free_tag = "[FREE]" if p.get("free_tier") else "[PAID]"
+        ui.info(f"  {i}. {p['name']} {free_tag} — {p['notes']}")
+        ui.info(f"     Get key: {p['key_url']}")
+        ui.info("")
+
+    try:
+        choice = input("  Enter number (default 1 = NVIDIA NIM): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(0)
+
+    if choice.isdigit() and 1 <= int(choice) <= len(provider_keys):
+        provider_name = provider_keys[int(choice) - 1]
+    else:
+        provider_name = provider_keys[0]
+
+    provider_info = PROVIDERS[provider_name]
+    ui.info(f"\nSelected: {provider_info['name']}")
+    ui.info(f"Get your free API key at: {provider_info['key_url']}\n")
+
+    # Step 2: Enter API key
     while True:
         try:
-            api_key = input("  Enter your API key: ").strip()
+            api_key = input(f"  Enter your {provider_info['name']} API key: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n")
+            print()
             sys.exit(0)
 
         if not api_key:
             ui.error("API key cannot be empty.")
             continue
 
-        if not api_key.startswith("nvapi-"):
-            ui.warning("Key doesn't start with 'nvapi-'. Are you sure it's correct?")
+        prefix = provider_info.get("key_prefix", "")
+        if prefix and not api_key.startswith(prefix):
+            ui.warning(f"Key doesn't start with '{prefix}'. Are you sure it's correct?")
             try:
                 confirm = input("  Continue anyway? (y/n): ").strip().lower()
             except (EOFError, KeyboardInterrupt):
-                print("\n")
+                print()
                 sys.exit(0)
             if confirm != 'y':
                 continue
 
+        config["provider"] = provider_name
         config["api_key"] = api_key
+        if "api_keys" not in config:
+            config["api_keys"] = {}
+        config["api_keys"][provider_name] = api_key
+        config["base_url"] = provider_info["base_url"]
         break
 
-    # Model selection
-    ui.info("\nChoose a default model:\n")
-    model_keys = list(AVAILABLE_MODELS.keys())
+    # Step 3: Choose default model from that provider
+    provider_models = MODELS_BY_PROVIDER.get(provider_name, {})
+    model_keys = list(provider_models.keys())
+    ui.info(f"\nChoose a default model for {provider_info['name']}:\n")
     for i, key in enumerate(model_keys, 1):
-        info = AVAILABLE_MODELS[key]
-        ui.info(f"  {i}. {info['name']} — {info['description']}")
-
-    ui.info(f"\n  Default: 1 ({AVAILABLE_MODELS[model_keys[0]]['name']})")
+        m = provider_models[key]
+        ui.info(f"  {i}. {m['name']} — {m['description']}")
 
     try:
-        choice = input("\n  Enter number (or press Enter for default): ").strip()
+        choice = input("\n  Enter number (default 1): ").strip()
     except (EOFError, KeyboardInterrupt):
         choice = ""
 
@@ -68,23 +94,21 @@ def setup_wizard(ui, config):
     else:
         selected = model_keys[0]
 
-    config["model"] = AVAILABLE_MODELS[selected]["id"]
+    config["model"] = provider_models[selected]["id"]
 
-    # Save config
     save_config(config)
-    ui.success(f"Config saved! Using {AVAILABLE_MODELS[selected]['name']}")
+    ui.success(f"Config saved! Provider: {provider_info['name']} | Model: {provider_models[selected]['name']}")
     ui.info(f"  Config file: {CONFIG_FILE}\n")
-
     return config
 
 
 def handle_command(command, args, engine, config, ui):
-    """Handle slash commands. Returns updated config or None."""
+    """Handle slash commands. Returns updated config dict."""
 
     if command == "help":
         ui.help_text()
 
-    elif command == "exit" or command == "quit" or command == "q":
+    elif command in ("exit", "quit", "q"):
         ui.info("Goodbye!")
         sys.exit(0)
 
@@ -93,9 +117,10 @@ def handle_command(command, args, engine, config, ui):
         ui.success("Conversation history cleared.")
 
     elif command == "status":
-        model_name = config["model"].split("/")[-1]
+        prov = config.get("provider", "nvidia")
         history_len = len(engine.conversation_history) // 2
-        ui.info(f"  Model: {config['model']}")
+        ui.info(f"  Provider:     {PROVIDERS.get(prov, {}).get('name', prov)}")
+        ui.info(f"  Model:        {config['model']}")
         ui.info(f"  Conversation: {history_len} exchanges")
         ui.info(f"  Last sources: {len(engine.last_sources)}")
         ui.info("")
@@ -106,15 +131,82 @@ def handle_command(command, args, engine, config, ui):
         else:
             ui.info("  No sources from last query.")
 
-    elif command == "config":
-        if args and args[0] == "key" and len(args) > 1:
-            # Set API key
+    elif command == "provider":
+        if not args:
+            ui.info(f"  Current provider: {config.get('provider','nvidia')}")
+            ui.info("  Use /provider list | /provider set <name> | /provider key <key>")
+
+        elif args[0] == "list":
+            ui.provider_list(PROVIDERS, config.get("provider", "nvidia"))
+
+        elif args[0] == "set" and len(args) > 1:
+            pname = args[1].lower()
+            if pname not in PROVIDERS:
+                ui.error(f"Unknown provider '{pname}'. Choose from: {', '.join(PROVIDERS)}")
+            else:
+                config = switch_provider(config, pname)
+                # Check if we have a key for this provider
+                stored_key = config.get("api_keys", {}).get(pname, "")
+                if not stored_key:
+                    pinfo = PROVIDERS[pname]
+                    ui.warning(f"No API key set for {pinfo['name']}.")
+                    ui.info(f"  Get one free at: {pinfo['key_url']}")
+                    ui.info(f"  Then run: /provider key <your-key>")
+                else:
+                    save_config(config)
+                    engine.update_config(config)
+                    ui.success(f"Switched to {PROVIDERS[pname]['name']} | Model: {config['model']}")
+
+        elif args[0] == "key" and len(args) > 1:
             new_key = args[1]
+            prov = config.get("provider", "nvidia")
+            if "api_keys" not in config:
+                config["api_keys"] = {}
+            config["api_keys"][prov] = new_key
             config["api_key"] = new_key
             save_config(config)
             engine.update_config(config)
-            ui.success("API key updated.")
-        elif args and args[0] == "temp" and len(args) > 1:
+            ui.success(f"API key updated for {PROVIDERS.get(prov,{}).get('name', prov)}.")
+
+        elif args[0] == "status":
+            prov = config.get("provider", "nvidia")
+            pinfo = PROVIDERS.get(prov, {})
+            api_keys = config.get("api_keys", {})
+            ui.info(f"\n  Active provider: {pinfo.get('name', prov)}")
+            ui.info(f"  Base URL:        {config.get('base_url','')}")
+            for p, k in api_keys.items():
+                status_str = "✓ set" if k else "✗ not set"
+                ui.info(f"  {p} key:  {status_str}")
+            ui.info("")
+
+        else:
+            ui.info("  Usage: /provider list | set <name> | key <key> | status")
+
+    elif command == "model":
+        if not args:
+            ui.info(f"  Current model: {config['model']}")
+            ui.info("  Use /model list or /model set <name>")
+        elif args[0] == "list":
+            active_models = get_active_provider_models(config)
+            ui.model_list(active_models, config["model"])
+        elif args[0] == "set" and len(args) > 1:
+            prov = config.get("provider", "nvidia")
+            model_id = get_model_id(args[1], provider=prov)
+            config["model"] = model_id
+            save_config(config)
+            engine.update_config(config)
+            # Find display name
+            display = model_id
+            for info in AVAILABLE_MODELS.values():
+                if info["id"] == model_id:
+                    display = info["name"]
+                    break
+            ui.success(f"Switched to {display}")
+        else:
+            ui.info("  Usage: /model list | /model set <name>")
+
+    elif command == "config":
+        if args and args[0] == "temp" and len(args) > 1:
             try:
                 temp = float(args[1])
                 if 0 <= temp <= 2:
@@ -141,58 +233,29 @@ def handle_command(command, args, engine, config, ui):
         else:
             ui.config_display(config)
 
-    elif command == "model":
-        if not args:
-            ui.info(f"  Current model: {config['model']}")
-            ui.info("  Use /model list or /model set <name>")
-        elif args[0] == "list":
-            ui.model_list(AVAILABLE_MODELS, config["model"])
-        elif args[0] == "set" and len(args) > 1:
-            model_name = args[1]
-            model_id = get_model_id(model_name)
-            config["model"] = model_id
-            save_config(config)
-            engine.update_config(config)
-
-            # Find display name
-            display_name = model_id
-            for key, info in AVAILABLE_MODELS.items():
-                if info["id"] == model_id:
-                    display_name = info["name"]
-                    break
-
-            ui.success(f"Switched to {display_name} ({model_id})")
-        else:
-            ui.info("  Usage: /model list | /model set <name>")
-
     elif command == "deep":
-        # Deep research mode — handled in main loop
         return "deep"
 
     else:
-        ui.warning(f"Unknown command: /{command}. Type /help for available commands.")
+        ui.warning(f"Unknown command: /{command}. Type /help for commands.")
 
     return config
 
 
 def main():
-    """Main application entry point."""
     ui = UI()
-
-    # Load or create config
     config = load_config()
 
-    # Check if first run (no API key)
     if not config.get("api_key"):
         ui.banner()
         config = setup_wizard(ui, config)
     else:
         ui.banner()
+        prov = config.get("provider", "nvidia")
+        ui.info(f"  Provider: {PROVIDERS.get(prov,{}).get('name', prov)}  |  Model: {config['model'].split('/')[-1]}\n")
 
-    # Initialize engine
     engine = AnswerEngine(config)
 
-    # Main loop
     while True:
         try:
             user_input = ui.prompt(config.get("model", ""))
@@ -210,23 +273,17 @@ def main():
         if not user_input:
             continue
 
-        # Handle commands
         if user_input.startswith("/"):
             parts = user_input[1:].split()
             command = parts[0].lower() if parts else ""
             args = parts[1:] if len(parts) > 1 else []
 
             if command == "deep":
-                # Deep research: rest of the line is the query
                 query = " ".join(args)
                 if not query:
                     ui.warning("Usage: /deep <your question>")
                     continue
-
-                def status_callback(msg):
-                    ui.status(msg)
-
-                result = engine.answer(query, deep=True, callback=status_callback)
+                result = engine.answer(query, deep=True, callback=ui.status)
                 ui.clear_status()
                 ui.answer(result["answer"], result["sources"], result["mode"])
             else:
@@ -235,12 +292,8 @@ def main():
                     config = result
             continue
 
-        # Regular question — run through the answer engine
-        def status_callback(msg):
-            ui.status(msg)
-
         try:
-            result = engine.answer(user_input, deep=False, callback=status_callback)
+            result = engine.answer(user_input, deep=False, callback=ui.status)
             ui.clear_status()
             ui.answer(result["answer"], result["sources"], result["mode"])
         except APIError as e:

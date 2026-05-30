@@ -74,15 +74,27 @@ python openplex.py
 
 ## Setup
 
-On first run, OpenPlex will ask for your **NVIDIA NIM API key**:
+On first run, a wizard lets you pick a provider and enter your API key.
 
-1. Go to [build.nvidia.com](https://build.nvidia.com)
-2. Create a free account
-3. Navigate to Settings → API Keys
-4. Generate a key (starts with `nvapi-`)
-5. Paste it into OpenPlex
+### Supported Providers
 
-The free tier gives you **1,000 inference credits** with a rate limit of **40 requests/minute** — enough for serious daily use.
+| Provider | Free Tier | Get Key | Key Format |
+|---|---|---|---|
+| **NVIDIA NIM** | 1000 credits on signup, 40 req/min | [build.nvidia.com](https://build.nvidia.com) | `nvapi-...` |
+| **Google AI Studio** | 15 req/min, 1M tokens/day | [aistudio.google.com](https://aistudio.google.com/app/apikey) | `AIza...` |
+| **OpenRouter** | Many `:free` models | [openrouter.ai/keys](https://openrouter.ai/keys) | `sk-or-...` |
+
+Switch providers anytime:
+```
+❯ /provider set google
+  ✓ Switched to Google AI Studio | Model: gemini-2.5-flash
+
+❯ /provider set openrouter
+  ✓ Switched to OpenRouter | Model: deepseek-r1-free
+
+❯ /provider key sk-or-...
+  ✓ API key updated for OpenRouter
+```
 
 ---
 
@@ -113,13 +125,18 @@ Just type any question:
 
 | Command | Description |
 |---------|-------------|
-| `/model list` | Show all available models |
+| `/provider list` | Show all providers |
+| `/provider set nvidia` | Switch to NVIDIA NIM |
+| `/provider set google` | Switch to Google AI Studio |
+| `/provider set openrouter` | Switch to OpenRouter |
+| `/provider key <key>` | Set API key for current provider |
+| `/provider status` | Show key status for all providers |
+| `/model list` | Show models for current provider |
 | `/model set <name>` | Switch to a different model |
 | `/deep <question>` | Deep research mode (more sources, query decomposition) |
 | `/sources` | Show sources from the last answer |
 | `/clear` | Clear conversation history |
 | `/config` | Show current configuration |
-| `/config key <api_key>` | Update API key |
 | `/config temp <0.0-2.0>` | Set temperature |
 | `/config tokens <number>` | Set max response tokens |
 | `/status` | Show current model and session info |
@@ -130,18 +147,37 @@ Just type any question:
 
 ## Available Models
 
+### NVIDIA NIM
 | Short Name | Model | Best For |
-|-----------|-------|----------|
-| `deepseek-r1` | DeepSeek R1 (671B MoE) | Reasoning, math, code |
+|---|---|---|
+| `deepseek-r1` | DeepSeek R1 671B | Reasoning, math, code |
 | `llama-3.3-70b` | Llama 3.3 70B | General purpose, fast |
 | `nemotron-super` | Nemotron Ultra 253B | Complex reasoning |
 | `qwen-2.5-72b` | Qwen 2.5 72B | Multilingual, coding |
 | `mistral-small` | Mistral Small 24B | Fast, efficient |
 
+### Google AI Studio
+| Short Name | Model | Best For |
+|---|---|---|
+| `gemini-2.5-flash` | Gemini 2.5 Flash | Best overall, free |
+| `gemini-2.0-flash` | Gemini 2.0 Flash | Stable, fast |
+| `gemini-2.0-flash-lite` | Gemini 2.0 Flash Lite | Lightest, fastest |
+| `gemini-2.5-pro` | Gemini 2.5 Pro | Most capable |
+
+### OpenRouter (all free)
+| Short Name | Model | Best For |
+|---|---|---|
+| `llama-3.3-70b-free` | Llama 3.3 70B | General purpose |
+| `deepseek-r1-free` | DeepSeek R1 | Reasoning |
+| `deepseek-v3-free` | DeepSeek V3 | Fast, capable |
+| `gemma-3-27b-free` | Gemma 3 27B | Google open model |
+| `qwen3-235b-free` | Qwen3 235B MoE | Massive model |
+| `mistral-7b-free` | Mistral 7B | Lightweight |
+
 Switch models anytime:
 ```
-❯ /model set llama-3.3-70b
-  ✓ Switched to Llama 3.3 70B
+❯ /model set gemini-2.5-flash
+  ✓ Switched to Gemini 2.5 Flash
 ```
 
 ---
@@ -207,10 +243,13 @@ Stored at `~/.openplex/config.json`:
 }
 ```
 
-Environment variable override:
+Environment variable overrides:
 ```bash
-export OPENPLEX_API_KEY="nvapi-..."
-export OPENPLEX_MODEL="meta/llama-3.3-70b-instruct"
+export OPENPLEX_NVIDIA_KEY="nvapi-..."
+export OPENPLEX_GOOGLE_KEY="AIza..."
+export OPENPLEX_OPENROUTER_KEY="sk-or-..."
+export OPENPLEX_PROVIDER="google"
+export OPENPLEX_MODEL="models/gemini-2.5-flash"
 ```
 
 ---
