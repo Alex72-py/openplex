@@ -23,7 +23,7 @@ PROVIDERS = {
         "key_url": "https://build.nvidia.com",
         "key_hint": "Starts with 'nvapi-'",
         "free_tier": True,
-        "notes": "1000 free credits on signup, 40 req/min",
+        "notes": "40 req/min",
     },
     "google": {
         "name": "Google AI Studio",
