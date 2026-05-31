@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 OpenPlex — A Perplexity Pro alternative for Termux
-Uses NVIDIA NIM API free tier models with web search and source verification.
+Uses NVIDIA NIM/Google/Openrouter free tier models with web search and source verification.
 """
 
 import sys
