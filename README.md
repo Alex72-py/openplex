@@ -2,7 +2,7 @@
 
 > An open-source Perplexity Pro alternative for your terminal.
 
-OpenPlex gives you AI-powered answers grounded in real web results — with citations, source ranking, and a full RAG pipeline. No browser. No subscription. Runs on Termux and Linux with minimal dependencies.
+OpenPlex gives you AI-powered answers grounded in real web results — with citations, source ranking, and a dual-pass RAG pipeline. No browser. No subscription. Runs on Termux and Linux with minimal dependencies.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue)]()
@@ -10,21 +10,28 @@ OpenPlex gives you AI-powered answers grounded in real web results — with cita
 
 ---
 
-## What It Does
+## What's New
 
-Most AI chatbots hallucinate because they answer from memory. OpenPlex works like Perplexity Pro:
+- **Pass-through RAG (2-Step Verification):** Deep research mode now uses a dual-pass system. First, it drafts an answer, then a separate verification pass checks every claim against the sources to eliminate hallucinations.
+- **Source Trust Engine:** Heuristics-based scoring that prioritizes high-authority domains (Official docs, .gov, .edu) and detects primary sources.
+- **Animated Terminal UI:** A new, polished interface with an animated ASCII logo and professional color palettes.
+- **Smart Orchestration:** Unified intent detection and query resolution for faster, more accurate searches.
 
-1. Takes your question
-2. Searches the web
-3. Fetches and ranks actual page content
-4. Injects sources into the prompt
-5. Generates a grounded answer with inline citations
+---
+
+## Core Pipeline
+
+OpenPlex works like Perplexity Pro, but natively in your terminal:
+
+1. **Orchestration:** Analyzes your question to decide if it needs a search or just a chat response.
+2. **Multi-Source Search:** Searches the web (DuckDuckGo) and fetches content from multiple pages in parallel.
+3. **Trust Ranking:** Scores and ranks sources based on domain authority and content quality.
+4. **Drafting:** Generates an initial answer with inline citations.
+5. **Verification (Deep Mode):** Cross-references the draft against sources to ensure absolute accuracy.
 
 ```
-Question → Search → Rank Sources → Inject into Prompt → Generate → Cite → Clean
+Question → Intent → Search → Trust Rank → Draft → Verify → Final Answer
 ```
-
-No hallucinations. Every claim is backed by a real URL.
 
 ---
 
@@ -73,6 +80,7 @@ Key format: `AIza...` · 15 req/min free
 |---|---|
 | `gemini-2.5-flash` | Gemini 2.5 Flash |
 | `gemini-2.0-flash` | Gemini 2.0 Flash |
+| `gemini-2.0-flash-lite` | Gemini 2.0 Flash Lite |
 | `gemini-2.5-pro` | Gemini 2.5 Pro |
 
 ### OpenRouter — [openrouter.ai](https://openrouter.ai/keys)
@@ -80,11 +88,11 @@ Key format: `sk-or-...` · Free models available
 
 | Short Name | Model |
 |---|---|
+| `llama-3.3-70b-free` | Llama 3.3 70B (free) |
 | `deepseek-r1-free` | DeepSeek R1 (free) |
 | `deepseek-v3-free` | DeepSeek V3 (free) |
-| `llama-3.3-70b-free` | Llama 3.3 70B (free) |
-| `qwen3-235b-free` | Qwen3 235B MoE (free) |
 | `gemma-3-27b-free` | Gemma 3 27B (free) |
+| `qwen3-235b-free` | Qwen3 235B (free) |
 | `mistral-7b-free` | Mistral 7B (free) |
 
 ---
@@ -92,23 +100,20 @@ Key format: `sk-or-...` · Free models available
 ## Commands
 
 ```
-/provider list              list providers
-/provider set <name>        switch provider (nvidia / google / openrouter)
-/provider key <key>         set API key for current provider
-/provider status            show stored keys
+/provider list              browse all search providers
+/provider set <name>        switch active provider
+/provider key <key>         update API credentials
 
-/model list                 list models for current provider
-/model set <name>           switch model
+/model list                 view models for current provider
+/model set <name>           switch active model
 
-/deep <question>            deep research mode (more sources)
-/sources                    show sources from last answer
-/clear                      clear conversation history
-/config                     show config
-/config temp <0-2>          set temperature
-/config tokens <n>          set max tokens
-/status                     session info
-/help                       show all commands
-/exit                       quit
+/deep <question>            in-depth research mode (2-step verification)
+/sources                    inspect sources from last answer
+/clear                      reset conversation state
+/config                     view current configuration
+/status                     display session analytics
+/help                       show this guide
+/exit                       terminate OpenPlex
 ```
 
 ---
@@ -125,23 +130,16 @@ export OPENPLEX_MODEL="models/gemini-2.5-flash"
 
 ---
 
-## Dependencies
-
-Only `rich` for the terminal UI (optional — falls back to plain text). Everything else is Python stdlib. **No pip installs needed for core functionality.**
-
-Config is stored at `~/.openplex/config.json`. Keys are saved per-provider so switching providers doesn't require re-entering them.
-
----
-
 ## Why OpenPlex?
 
-| | Perplexity Pro | OpenPlex |
+| Feature | Perplexity Pro | OpenPlex |
 |---|---|---|
-| Cost | $20/month | Free |
-| Open source | ❌ | ✅ |
-| Runs on Termux | ❌ | ✅ |
-| Bring your own model | ❌ | ✅ |
-| Citation-grounded answers | ✅ | ✅ |
+| **Cost** | $20/month | **Free** |
+| **Open Source** | ❌ | **✅** |
+| **Verification Pass** | ✅ | **✅ (Deep Mode)** |
+| **Trust Engine** | ✅ | **✅** |
+| **Terminal Native** | ❌ | **✅** |
+| **BYO Model** | ❌ | **✅** |
 
 ---
 
