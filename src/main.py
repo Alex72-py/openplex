@@ -252,7 +252,8 @@ def main():
     else:
         ui.banner()
         prov = config.get("provider", "nvidia")
-        ui.info(f"  Provider: {PROVIDERS.get(prov,{}).get('name', prov)}  |  Model: {config['model'].split('/')[-1]}\n")
+        model = config.get("model", "unknown")
+        ui.display_hub(PROVIDERS.get(prov, {}).get("name", prov), model, config)
 
     engine = AnswerEngine(config)
 

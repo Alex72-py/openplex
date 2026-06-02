@@ -186,23 +186,23 @@ def search_and_fetch(query, num_results=6, max_content_chars=2500):
     if not results:
         return []
 
-    # Fetch content from results in parallel (but limited)
+    # Fetch content from results in parallel
     def fetch_one(result):
         content = fetch_page_content(result["url"], max_chars=max_content_chars)
         result["content"] = content
         return result
 
     enriched = []
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=6) as executor:
         futures = {executor.submit(fetch_one, r): r for r in results}
         for future in as_completed(futures, timeout=20):
             try:
                 result = future.result()
                 enriched.append(result)
             except Exception:
-                enriched.append(futures[future])
+                pass
 
-    # Sort back to original order (as_completed changes order)
+    # Sort back to original order
     url_order = {r["url"]: i for i, r in enumerate(results)}
     enriched.sort(key=lambda x: url_order.get(x["url"], 99))
 
@@ -211,20 +211,26 @@ def search_and_fetch(query, num_results=6, max_content_chars=2500):
 
 def multi_search(queries, num_results_per=4, max_content_chars=2000):
     """
-    Execute multiple search queries and combine results.
-    Used for query decomposition — searches sub-queries separately.
+    Execute multiple search queries concurrently and combine results.
+    Used for query decomposition — searches sub-queries in parallel.
     Deduplicates by URL.
     """
+    if not queries:
+        return []
+        
     all_results = []
     seen_urls = set()
 
-    for query in queries:
-        results = search_and_fetch(query, num_results=num_results_per, max_content_chars=max_content_chars)
-        for r in results:
-            if r["url"] not in seen_urls:
-                seen_urls.add(r["url"])
-                all_results.append(r)
-        # Small delay between searches to be polite
-        time.sleep(0.3)
+    with ThreadPoolExecutor(max_workers=min(len(queries), 6)) as executor:
+        futures = {executor.submit(search_and_fetch, q, num_results_per, max_content_chars): q for q in queries}
+        for future in as_completed(futures, timeout=30):
+            try:
+                results = future.result()
+                for r in results:
+                    if r["url"] not in seen_urls:
+                        seen_urls.add(r["url"])
+                        all_results.append(r)
+            except Exception:
+                continue
 
     return all_results

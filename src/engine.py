@@ -14,10 +14,11 @@ import re
 from api_client import chat_completion, APIError
 from search_engine import search_and_fetch, multi_search
 from config import load_config
+from source_scoring import calculate_trust_score, deduplicate_sources
 
 
-# System prompt that forces citation-grounded answers
-SEARCH_SYSTEM_PROMPT = """You are OpenPlex, an AI answer engine. Your job is to provide accurate, well-cited answers based ONLY on the provided source documents.
+# Pass 1: System prompt for generating a high-quality initial draft
+SEARCH_SYSTEM_PROMPT = """You are OpenPlex, an AI answer engine. Your job is to provide accurate, well-cited answers based ONLY on the provided sources.
 
 STRICT RULES:
 1. ONLY use information from the provided sources. Do NOT use prior knowledge.
@@ -25,40 +26,42 @@ STRICT RULES:
 3. If sources conflict, mention the disagreement and cite both sides.
 4. If sources don't contain enough info to answer, say so explicitly.
 5. Never fabricate or hallucinate information not in the sources.
-6. Be concise but thorough. Use paragraphs, not bullet lists.
+6. Be concise but thorough. Use paragraphs for readability.
 7. Start with a direct answer, then elaborate with details.
-8. End with a brief summary if the answer is long.
 
-FORMAT:
-- Use inline citations like [1], [2] after statements
-- Bold key terms with **term**
-- Use paragraphs for readability"""
+This is a DRAFT that will be verified for accuracy and citation integrity."""
 
-# Prompt for query decomposition
-DECOMPOSE_PROMPT = """Break this question into 2-4 focused search queries that would help find comprehensive information to answer it. Each query should target a different aspect of the question.
+# Pass 2: System prompt for Verification and Final Polishing
+VERIFICATION_PROMPT = """You are the OpenPlex Verifier. Your task is to review the research draft against the sources to ensure absolute accuracy and proper citation.
 
-Return ONLY a JSON array of search query strings. No explanation.
-Example: ["query 1", "query 2", "query 3"]
+SOURCE TRUST DATA:
+{source_trust_info}
 
-Question: {question}"""
+STRICT RULES:
+1. Ensure every claim is supported by the sources.
+2. Verify that inline citations [1], [2], etc. correctly match the source numbers.
+3. If a claim is weak or unverified, remove it or explicitly state the uncertainty.
+4. Format the final response as clean Markdown.
+5. Do NOT include trust scores or confidence levels in the final output text.
 
-# Prompt for determining if a query needs web search
-NEEDS_SEARCH_PROMPT = """Determine if this message requires a web search to answer properly, or if it's a conversational/follow-up message that can be answered from the existing conversation context.
+Sources:
+{sources_text}
 
-Reply with ONLY "search" or "chat". Nothing else.
+Draft to Verify:
+{draft}"""
 
-Message: {message}"""
+# Unified Orchestration Prompt: Intent + Resolution + Decomposition
+ORCHESTRATION_PROMPT = """Analyze the user's message and the conversation context.
+Provide your analysis in JSON format with the following keys:
+- "intent": "search" or "chat". Use "search" for facts, news, or info-seeking.
+- "resolved_query": Rewrite the user's message as a clear, standalone search query.
+- "sub_queries": If deep research is requested or needed, provide 2-4 focused sub-queries. Otherwise, [].
 
-# Prompt for follow-up context resolution
-FOLLOWUP_PROMPT = """Given the conversation history and the user's latest message, determine what they're actually asking about. Resolve any pronouns or references to previous topics.
-
-Rewrite their message as a clear, standalone question suitable for web search.
-Return ONLY the rewritten question, nothing else.
-
-Conversation context:
+Conversation Context:
 {context}
 
-Latest message: {message}"""
+Message: {message}
+Deep Mode: {deep}"""
 
 
 class AnswerEngine:
@@ -68,6 +71,7 @@ class AnswerEngine:
         self.config = config or load_config()
         self.conversation_history = []
         self.last_sources = []
+        self.session_cache = {}
 
     def update_config(self, config):
         """Update engine config (e.g., after model/provider switch)."""
@@ -85,283 +89,237 @@ class AnswerEngine:
             provider=self.config.get("provider"),
         )
 
-    def _needs_search(self, message):
-        """Determine if a message needs web search or is just conversation."""
-        # Short messages that are clearly conversational
+    def _fast_needs_search(self, message):
+        """Fast regex check to bypass LLM for simple greetings."""
+        msg_lower = message.lower().strip()
         conversational_patterns = [
-            r'^(hi|hello|hey|thanks|thank you|ok|okay|got it|sure|bye)',
+            r'^(hi|hello|hey|thanks|thank you|ok|okay|got it|sure|bye|yes|no)',
         ]
         for pattern in conversational_patterns:
-            if re.match(pattern, message.lower().strip()):
-                if len(self.conversation_history) == 0:
-                    return True
+            if re.match(pattern, msg_lower):
                 return False
-
-        # Explicit info-seeking keywords → always search
-        if any(w in message.lower() for w in [
-            "what is", "what are", "how to", "how do", "why does", "why is",
-            "when did", "when was", "who is", "who are", "where is", "where are",
-            "latest", "news", "current", "recent", "2024", "2025", "2026",
-            "best", "compare", "difference", "vs", "versus", "review",
-        ]):
-            return True
-
-        # Use LLM to decide if we have conversation context
-        if self.conversation_history:
-            try:
-                result = self._call_llm(
-                    [{"role": "user", "content": NEEDS_SEARCH_PROMPT.format(message=message)}],
-                    temperature=0.1,
-                    max_tokens=10,
-                )
-                return "search" in result.lower()
-            except APIError:
-                return True  # Default to search on error
+        # If starts with "write a" or similar, usually chat
+        if any(msg_lower.startswith(w) for w in ["write a", "create a", "generate", "code a", "translate"]):
+            return False
         return True
 
-    def _resolve_followup(self, message):
-        """Resolve follow-up questions using conversation context."""
-        if not self.conversation_history:
-            return message
+    def _orchestrate(self, message, deep=False):
+        """
+        Single-pass orchestration: Determine intent, resolve query, and decompose.
+        Returns (intent, resolved_query, sub_queries)
+        """
+        # Fast path heuristics
+        if not self._fast_needs_search(message):
+            return "chat", message, []
 
-        # Build context from last 3 exchanges
+        # Build context
         context_parts = []
         for entry in self.conversation_history[-6:]:
-            role = entry["role"]
-            content = entry["content"][:200]
-            context_parts.append(f"{role}: {content}")
+            context_parts.append(f"{entry['role']}: {entry['content'][:200]}")
         context = "\n".join(context_parts)
 
         try:
             result = self._call_llm(
-                [{"role": "user", "content": FOLLOWUP_PROMPT.format(context=context, message=message)}],
-                temperature=0.2,
-                max_tokens=100,
+                [{"role": "user", "content": ORCHESTRATION_PROMPT.format(
+                    context=context, message=message, deep=deep
+                )}],
+                temperature=0.1,
+                max_tokens=300,
             )
-            resolved = result.strip().strip('"').strip("'")
-            return resolved if len(resolved) > 5 else message
-        except APIError:
-            return message
-
-    def _decompose_query(self, question):
-        """Break a complex question into sub-queries for multi-source search."""
-        try:
-            result = self._call_llm(
-                [{"role": "user", "content": DECOMPOSE_PROMPT.format(question=question)}],
-                temperature=0.3,
-                max_tokens=200,
-            )
-
-            # Parse JSON array from response — strip markdown fences if present
-            result = re.sub(r'```json\s*', '', result)
-            result = re.sub(r'```\s*', '', result)
-            result = result.strip()
-
-            # Extract JSON array even if surrounded by text
-            match = re.search(r'\[.*?\]', result, re.DOTALL)
-            if match:
-                result = match.group(0)
-
-            queries = json.loads(result)
-            if isinstance(queries, list) and len(queries) > 0:
-                return [str(q) for q in queries[:4]]
-        except (json.JSONDecodeError, APIError, Exception):
-            pass
-
-        return [question]
+            # Parse JSON
+            match = re.search(r'\{.*\}', result, re.DOTALL)
+            data = json.loads(match.group(0)) if match else {"intent": "search", "resolved_query": message, "sub_queries": []}
+            
+            intent = data.get("intent", "search")
+            resolved = data.get("resolved_query", message)
+            sub_queries = data.get("sub_queries", [])
+            
+            # If sub_queries provided but not deep mode, we might ignore them or use them if complex
+            if not deep:
+                sub_queries = []
+                
+            return intent, resolved, sub_queries
+        except Exception:
+            return "search", message, []
 
     def _rank_sources(self, sources, query):
         """
-        Rank sources by relevance to the query.
-        Keyword-based scoring — no ML needed, keeps it lightweight.
+        Rank sources using the Trust Engine and keyword relevance.
+        Applies deduplication to ensure Source Diversity.
         """
-        query_words = set(query.lower().split())
-        # Remove common stop words from scoring
-        stop_words = {"the", "a", "an", "is", "are", "was", "were", "be", "been",
-                      "have", "has", "do", "does", "did", "will", "would", "could",
-                      "should", "may", "might", "shall", "can", "to", "of", "in",
-                      "for", "on", "with", "at", "by", "from", "up", "about", "into"}
-        query_words -= stop_words
+        if not sources:
+            return []
 
+        # 1. Calculate Trust Scores for all sources
         for source in sources:
-            score = 0
+            score = calculate_trust_score(
+                url=source.get("url", ""),
+                title=source.get("title", ""),
+                snippet=source.get("snippet", ""),
+                content=source.get("content", ""),
+                query=query
+            )
+            source["trust_score"] = score
+
+        # 2. Add keyword relevance bonus to help local ranking
+        query_words = set(re.findall(r'\w{3,}', query.lower()))
+        for source in sources:
             text = f"{source.get('title', '')} {source.get('snippet', '')} {source.get('content', '')}".lower()
+            overlap = sum(1 for word in query_words if word in text)
+            # Relevance adds a small modifier to trust for final ranking
+            source["relevance_modifier"] = min(overlap * 2, 15)
+            source["final_rank_score"] = source["trust_score"] + source["relevance_modifier"]
 
-            # Keyword overlap scoring
-            for word in query_words:
-                if len(word) > 3:
-                    count = text.count(word)
-                    score += min(count, 5)
+        # 3. Deduplicate (Source Diversity)
+        unique_sources = deduplicate_sources(sources)
 
-            # Bonus for having actual fetched content
-            if source.get("content"):
-                score += 3
-
-            # Bonus for snippet relevance
-            if source.get("snippet"):
-                snippet_words = set(source["snippet"].lower().split())
-                overlap = len(query_words & snippet_words)
-                score += overlap * 2
-
-            # Penalty for known low-quality domains
-            url = source.get("url", "").lower()
-            if any(d in url for d in ["pinterest", "quora.com", "reddit.com/r/memes"]):
-                score = max(0, score - 2)
-
-            source["relevance_score"] = score
-
-        sources.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
-        return sources
+        # 4. Final sort by composite score
+        unique_sources.sort(key=lambda x: x.get("final_rank_score", 0), reverse=True)
+        return unique_sources
 
     def _build_context_prompt(self, sources, question):
-        """
-        Build the citation-embedded prompt (Perplexity's key mechanism).
-        Sources are injected INTO the prompt BEFORE generation.
-        """
+        """Build the sources section for Pass 1 (Drafting)."""
         source_blocks = []
         for i, source in enumerate(sources, 1):
             content = source.get("content") or source.get("snippet", "No content available")
-            if len(content) > 2000:
-                content = content[:2000] + "..."
+            if len(content) > 3000:
+                content = content[:3000] + "..."
 
             source_blocks.append(
                 f"[Source {i}] {source['title']}\n"
                 f"URL: {source['url']}\n"
+                f"Trust Score: {source.get('trust_score', 0)}\n"
                 f"Content: {content}\n"
             )
 
         sources_text = "\n---\n".join(source_blocks)
 
         user_prompt = (
-            f"Based on the following sources, answer this question: {question}\n\n"
+            f"Question: {question}\n\n"
             f"SOURCES:\n{sources_text}\n\n"
-            f"INSTRUCTIONS:\n"
-            f"- Cite sources using [1], [2], etc. after each claim\n"
-            f"- Only use information from the sources above\n"
-            f"- If sources disagree, mention both perspectives\n"
-            f"- If information is insufficient, say so\n"
-            f"- Be thorough but concise"
+            f"Task: Write a detailed research draft based on these sources. Cite using [1], [2], etc."
         )
         return user_prompt
 
-    def _verify_response(self, response, sources):
+    def _verify_claims(self, draft, sources):
         """
-        Remove citations to non-existent source numbers.
+        Pass 2: Verify the draft against sources and format the final answer.
         """
-        max_source = len(sources)
-        citations = re.findall(r'\[(\d+)\]', response)
-        for cite in citations:
-            num = int(cite)
-            if num > max_source or num < 1:
-                response = response.replace(f'[{cite}]', '')
-        return response
+        source_trust_info = "\n".join([
+            f"- Source {i}: {s.get('url')} (Trust Score: {s.get('trust_score')})"
+            for i, s in enumerate(sources, 1)
+        ])
+        
+        source_blocks = []
+        for i, source in enumerate(sources, 1):
+            content = source.get("content") or source.get("snippet", "No content available")
+            source_blocks.append(f"[Source {i}] {source['title']}\nURL: {source['url']}\nContent: {content}\n")
+        
+        sources_text = "\n---\n".join(source_blocks)
+
+        messages = [
+            {"role": "system", "content": VERIFICATION_PROMPT.format(
+                source_trust_info=source_trust_info,
+                draft=draft,
+                sources_text=sources_text
+            )}
+        ]
+
+        try:
+            return self._call_llm(messages, temperature=0.2)
+        except APIError:
+            return draft # Fallback to draft if verification fails
 
     def answer(self, message, deep=False, callback=None):
         """
-        Main entry point: process a user message and return an answer.
-
-        Args:
-            message: User's question/message
-            deep: If True, use deep research mode (more sources, decomposition)
-            callback: Optional function to call with status updates
-
-        Returns:
-            dict with keys: answer, sources, mode ("search", "chat", or "error")
+        Main entry point: process a user message and return an answer using the Trust Engine.
+        Optimized for speed: single-pass for standard, two-pass for deep.
         """
         def status(msg):
             if callback:
                 callback(msg)
 
-        # Step 1: Determine if we need to search
-        needs_search = self._needs_search(message)
+        # Check session cache for exact repeats (fastest)
+        cache_key = f"{'deep:' if deep else ''}{message.strip().lower()}"
+        if cache_key in self.session_cache:
+            status("Retrieved from cache...")
+            return self.session_cache[cache_key]
 
-        if not needs_search:
+        # Step 1: Orchestration (Intent + Resolution + Decomposition)
+        status("Analyzing query...")
+        intent, resolved_query, sub_queries = self._orchestrate(message, deep=deep)
+
+        if intent == "chat":
             status("Thinking...")
             messages = self.conversation_history[-10:] + [{"role": "user", "content": message}]
             try:
                 response = self._call_llm(messages)
                 self.conversation_history.append({"role": "user", "content": message})
                 self.conversation_history.append({"role": "assistant", "content": response})
-                return {"answer": response, "sources": [], "mode": "chat"}
+                result = {"answer": response, "sources": [], "mode": "chat"}
+                self.session_cache[cache_key] = result
+                return result
             except APIError as e:
                 return {"answer": f"Error: {e}", "sources": [], "mode": "error"}
 
-        # Step 2: Resolve follow-up references
-        resolved_query = self._resolve_followup(message)
+        # Step 2: Search the web
         status(f"Searching: {resolved_query[:60]}...")
-
-        # Step 3: Decompose query (deep mode or long questions)
-        if deep or len(message.split()) > 10:
-            status("Breaking down question...")
-            queries = self._decompose_query(resolved_query)
-            status(f"Searching {len(queries)} sub-queries...")
+        
+        if sub_queries:
+            # Parallel multi-search (used for /deep)
+            sources = multi_search(sub_queries, num_results_per=4, max_content_chars=2000)
         else:
-            queries = [resolved_query]
-
-        # Step 4: Search the web
-        if len(queries) > 1:
-            sources = multi_search(queries, num_results_per=4, max_content_chars=2000)
-        else:
-            sources = search_and_fetch(queries[0], num_results=8, max_content_chars=2500)
+            # Standard search: reduce to 5 results for speed
+            sources = search_and_fetch(resolved_query, num_results=5, max_content_chars=2500)
 
         if not sources:
             status("Retrying search...")
-            sources = search_and_fetch(message, num_results=6, max_content_chars=2000)
+            sources = search_and_fetch(message, num_results=5, max_content_chars=2000)
 
         if not sources:
-            return {
-                "answer": "I couldn't find any relevant sources for this query. Please try rephrasing your question.",
+            result = {
+                "answer": "I couldn't find any relevant sources for this query.",
                 "sources": [],
                 "mode": "search"
             }
+            self.session_cache[cache_key] = result
+            return result
 
-        # Step 5: Rank and filter sources
-        status(f"Analyzing {len(sources)} sources...")
+        # Step 3: Rank and filter sources using Trust Engine
+        status(f"Ranking {len(sources)} sources...")
         sources = self._rank_sources(sources, resolved_query)
 
-        max_sources = self.config.get("max_sources", 8)
-        if deep:
-            max_sources = min(len(sources), 12)
-        sources = sources[:max_sources]
-
-        # Quality threshold: drop zero-relevance sources
-        sources = [s for s in sources if s.get("relevance_score", 0) > 0]
-
-        if not sources:
-            return {
-                "answer": "Found some results but none were relevant enough to provide a reliable answer. Try being more specific.",
-                "sources": [],
-                "mode": "search"
-            }
-
-        # Step 6: Build citation-embedded prompt and generate answer
+        # Step 4: Drafting (Pass 1)
         status("Generating answer...")
-        context_prompt = self._build_context_prompt(sources, resolved_query)
+        draft_prompt = self._build_context_prompt(sources, resolved_query)
 
         messages = [{"role": "system", "content": SEARCH_SYSTEM_PROMPT}]
-
-        # Add last 2 conversation exchanges for context
         if self.conversation_history:
             messages.extend(self.conversation_history[-4:])
-
-        messages.append({"role": "user", "content": context_prompt})
+        messages.append({"role": "user", "content": draft_prompt})
 
         try:
-            response = self._call_llm(messages)
+            answer = self._call_llm(messages, temperature=0.3)
         except APIError as e:
             return {"answer": f"Error generating answer: {e}", "sources": sources, "mode": "error"}
 
-        # Step 7: Verify citations and clean response
-        response = self._verify_response(response, sources)
+        # Step 5: Verification (Pass 2) - Only for Deep Research
+        if deep:
+            status("Verifying claims...")
+            answer = self._verify_claims(answer, sources)
 
         # Update conversation history
         self.conversation_history.append({"role": "user", "content": message})
-        self.conversation_history.append({"role": "assistant", "content": response})
+        self.conversation_history.append({"role": "assistant", "content": answer})
         self.last_sources = sources
 
-        return {"answer": response, "sources": sources, "mode": "search"}
+        result = {"answer": answer, "sources": sources, "mode": "search" if not deep else "deep"}
+        self.session_cache[cache_key] = result
+        return result
+
 
     def clear_history(self):
-        """Clear conversation history."""
+        """Clear conversation history and session cache."""
         self.conversation_history = []
         self.last_sources = []
+        self.session_cache = {}
