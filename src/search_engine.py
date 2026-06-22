@@ -267,14 +267,16 @@ def tavily_search_and_fetch(query, api_key, num_results=6, max_content_chars=250
     Search using Tavily and return results in the same format as search_and_fetch().
     Tavily's include_raw_content populates 'content' directly, no separate fetch needed.
     """
-    client = _get_tavily_client(api_key)
     try:
+        client = _get_tavily_client(api_key)
         response = client.search(
             query=query,
             max_results=num_results,
             search_depth="advanced",
             include_raw_content=True,
         )
+    except ImportError:
+        return []
     except Exception:
         return []
 
