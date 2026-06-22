@@ -245,7 +245,9 @@ def load_config():
     if os.environ.get("TAVILY_API_KEY"):
         config["tavily_api_key"] = os.environ["TAVILY_API_KEY"]
     if os.environ.get("OPENPLEX_SEARCH_PROVIDER"):
-        config["search_provider"] = os.environ["OPENPLEX_SEARCH_PROVIDER"]
+        provider = os.environ["OPENPLEX_SEARCH_PROVIDER"].strip().lower()
+        if provider in {"duckduckgo", "tavily"}:
+            config["search_provider"] = provider
 
     # Always sync active api_key from provider-specific key
     prov = config.get("provider", DEFAULT_PROVIDER)
