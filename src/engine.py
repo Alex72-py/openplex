@@ -12,7 +12,7 @@ Implements the Perplexity-like RAG pipeline:
 import json
 import re
 from api_client import chat_completion, APIError
-from search_engine import search_and_fetch, multi_search
+from search_engine import search_and_fetch, multi_search, tavily_search_and_fetch, tavily_multi_search
 from config import load_config
 from source_scoring import calculate_trust_score, deduplicate_sources
 
@@ -263,18 +263,29 @@ class AnswerEngine:
                 return {"answer": f"Error: {e}", "sources": [], "mode": "error"}
 
         # Step 2: Search the web
+        use_tavily = (self.config.get("search_provider") == "tavily"
+                      and self.config.get("tavily_api_key"))
         status(f"Searching: {resolved_query[:60]}...")
-        
-        if sub_queries:
-            # Parallel multi-search (used for /deep)
-            sources = multi_search(sub_queries, num_results_per=4, max_content_chars=2000)
-        else:
-            # Standard search: reduce to 5 results for speed
-            sources = search_and_fetch(resolved_query, num_results=5, max_content_chars=2500)
 
-        if not sources:
-            status("Retrying search...")
-            sources = search_and_fetch(message, num_results=5, max_content_chars=2000)
+        if use_tavily:
+            tavily_key = self.config["tavily_api_key"]
+            if sub_queries:
+                sources = tavily_multi_search(sub_queries, tavily_key, num_results_per=4, max_content_chars=2000)
+            else:
+                sources = tavily_search_and_fetch(resolved_query, tavily_key, num_results=5, max_content_chars=2500)
+            if not sources:
+                status("Retrying search...")
+                sources = tavily_search_and_fetch(message, tavily_key, num_results=5, max_content_chars=2000)
+        else:
+            if sub_queries:
+                # Parallel multi-search (used for /deep)
+                sources = multi_search(sub_queries, num_results_per=4, max_content_chars=2000)
+            else:
+                # Standard search: reduce to 5 results for speed
+                sources = search_and_fetch(resolved_query, num_results=5, max_content_chars=2500)
+            if not sources:
+                status("Retrying search...")
+                sources = search_and_fetch(message, num_results=5, max_content_chars=2000)
 
         if not sources:
             result = {

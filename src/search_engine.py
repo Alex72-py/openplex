@@ -14,6 +14,11 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+try:
+    from tavily import TavilyClient
+except ImportError:
+    TavilyClient = None
+
 
 # Disable SSL verification for Termux compatibility (some certs are missing)
 SSL_CTX = ssl.create_default_context()
@@ -223,6 +228,83 @@ def multi_search(queries, num_results_per=4, max_content_chars=2000):
 
     with ThreadPoolExecutor(max_workers=min(len(queries), 6)) as executor:
         futures = {executor.submit(search_and_fetch, q, num_results_per, max_content_chars): q for q in queries}
+        for future in as_completed(futures, timeout=30):
+            try:
+                results = future.result()
+                for r in results:
+                    if r["url"] not in seen_urls:
+                        seen_urls.add(r["url"])
+                        all_results.append(r)
+            except Exception:
+                continue
+
+    return all_results
+
+
+# ─────────────────────────────────────────────
+# Tavily search adapters
+# ─────────────────────────────────────────────
+
+def _get_tavily_client(api_key):
+    """Create a TavilyClient instance."""
+    if TavilyClient is None:
+        raise ImportError("tavily-python is not installed. Run: pip install tavily-python")
+    return TavilyClient(api_key=api_key)
+
+
+def _tavily_result_to_dict(result):
+    """Convert a Tavily result to the standard {title, url, snippet, content} format."""
+    return {
+        "title": result.get("title", ""),
+        "url": result.get("url", ""),
+        "snippet": result.get("content", ""),
+        "content": result.get("raw_content") or result.get("content", ""),
+    }
+
+
+def tavily_search_and_fetch(query, api_key, num_results=6, max_content_chars=2500):
+    """
+    Search using Tavily and return results in the same format as search_and_fetch().
+    Tavily's include_raw_content populates 'content' directly, no separate fetch needed.
+    """
+    client = _get_tavily_client(api_key)
+    try:
+        response = client.search(
+            query=query,
+            max_results=num_results,
+            search_depth="advanced",
+            include_raw_content=True,
+        )
+    except Exception:
+        return []
+
+    results = []
+    for r in response.get("results", []):
+        item = _tavily_result_to_dict(r)
+        # Truncate content to match existing behaviour
+        if item["content"] and len(item["content"]) > max_content_chars:
+            item["content"] = item["content"][:max_content_chars] + "..."
+        results.append(item)
+
+    return results
+
+
+def tavily_multi_search(queries, api_key, num_results_per=4, max_content_chars=2000):
+    """
+    Execute multiple Tavily searches concurrently and combine results.
+    Deduplicates by URL, matching multi_search() behaviour.
+    """
+    if not queries:
+        return []
+
+    all_results = []
+    seen_urls = set()
+
+    with ThreadPoolExecutor(max_workers=min(len(queries), 6)) as executor:
+        futures = {
+            executor.submit(tavily_search_and_fetch, q, api_key, num_results_per, max_content_chars): q
+            for q in queries
+        }
         for future in as_completed(futures, timeout=30):
             try:
                 results = future.result()
