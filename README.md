@@ -12,6 +12,7 @@ OpenPlex gives you AI-powered answers grounded in real web results — with cita
 
 ## What's New
 
+- **Tavily Search Backend:** Tavily is now supported as an optional, drop-in search provider alongside DuckDuckGo. Set `OPENPLEX_SEARCH_PROVIDER=tavily` and add your API key to get richer, AI-optimised web results with no extra scraping needed.
 - **Pass-through RAG (2-Step Verification):** Deep research mode now uses a dual-pass system. First, it drafts an answer, then a separate verification pass checks every claim against the sources to eliminate hallucinations.
 - **Source Trust Engine:** Heuristics-based scoring that prioritizes high-authority domains (Official docs, .gov, .edu) and detects primary sources.
 - **Animated Terminal UI:** A new, polished interface with an animated ASCII logo and professional color palettes.
@@ -24,7 +25,7 @@ OpenPlex gives you AI-powered answers grounded in real web results — with cita
 OpenPlex works like Perplexity Pro, but natively in your terminal:
 
 1. **Orchestration:** Analyzes your question to decide if it needs a search or just a chat response.
-2. **Multi-Source Search:** Searches the web (DuckDuckGo) and fetches content from multiple pages in parallel.
+2. **Multi-Source Search:** Searches the web via DuckDuckGo (default) or Tavily (optional) and fetches content from multiple pages in parallel.
 3. **Trust Ranking:** Scores and ranks sources based on domain authority and content quality.
 4. **Drafting:** Generates an initial answer with inline citations.
 5. **Verification (Deep Mode):** Cross-references the draft against sources to ensure absolute accuracy.
@@ -42,7 +43,8 @@ Question → Intent → Search → Trust Rank → Draft → Verify → Final Ans
 pkg install python git
 git clone https://github.com/Alex72-py/openplex.git
 cd openplex
-pip install rich
+pip install rich                     # required
+pip install tavily-python            # optional — enables Tavily search
 python openplex.py
 ```
 
@@ -50,11 +52,23 @@ python openplex.py
 ```bash
 git clone https://github.com/Alex72-py/openplex.git
 cd openplex
-pip3 install rich
+pip3 install rich                    # required
+pip3 install tavily-python           # optional — enables Tavily search
 python3 openplex.py
 ```
 
 On first run, a setup wizard walks you through choosing a provider and entering your API key.
+
+---
+
+## Search Backends
+
+OpenPlex supports two web search backends. DuckDuckGo requires no API key; Tavily is opt-in and delivers richer content out of the box.
+
+| Backend | API Key Required | How to Enable |
+|---|---|---|
+| **DuckDuckGo** (default) | No | Nothing — works out of the box |
+| **Tavily** | Yes — [app.tavily.com](https://app.tavily.com) | Set `TAVILY_API_KEY` + `OPENPLEX_SEARCH_PROVIDER=tavily` |
 
 ---
 
@@ -100,7 +114,7 @@ Key format: `sk-or-...` · Free models available
 ## Commands
 
 ```
-/provider list              browse all search providers
+/provider list              browse all LLM providers
 /provider set <name>        switch active provider
 /provider key <key>         update API credentials
 
@@ -126,6 +140,10 @@ export OPENPLEX_GOOGLE_KEY="AIza..."
 export OPENPLEX_OPENROUTER_KEY="sk-or-..."
 export OPENPLEX_PROVIDER="google"
 export OPENPLEX_MODEL="models/gemini-2.5-flash"
+
+# Tavily search (optional)
+export TAVILY_API_KEY="tvly-..."
+export OPENPLEX_SEARCH_PROVIDER="tavily"   # or "duckduckgo" (default)
 ```
 
 ---
@@ -140,6 +158,7 @@ export OPENPLEX_MODEL="models/gemini-2.5-flash"
 | **Trust Engine** | ✅ | **✅** |
 | **Terminal Native** | ❌ | **✅** |
 | **BYO Model** | ❌ | **✅** |
+| **BYO Search Backend** | ❌ | **✅ (DDG or Tavily)** |
 
 ---
 
