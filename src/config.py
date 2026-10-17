@@ -189,7 +189,7 @@ DEFAULT_CONFIG = {
     "search_depth": "standard",
     "verify_sources": True,
     "show_sources": True,
-    "search_provider": "duckduckgo",  # 'duckduckgo' or 'tavily'
+    "search_provider": "duckduckgo",  # 'duckduckgo', 'tavily' or 'parallel'
     "tavily_api_key": "",
 }
 
@@ -246,7 +246,7 @@ def load_config():
         config["tavily_api_key"] = os.environ["TAVILY_API_KEY"]
     if os.environ.get("OPENPLEX_SEARCH_PROVIDER"):
         provider = os.environ["OPENPLEX_SEARCH_PROVIDER"].strip().lower()
-        if provider in {"duckduckgo", "tavily"}:
+        if provider in {"duckduckgo", "tavily", "parallel"}:
             config["search_provider"] = provider
 
     # Always sync active api_key from provider-specific key

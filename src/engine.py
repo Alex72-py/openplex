@@ -11,10 +11,12 @@ Implements the Perplexity-like RAG pipeline:
 
 import json
 import re
+import uuid
 from api_client import chat_completion, APIError
 from search_engine import search_and_fetch, multi_search, tavily_search_and_fetch, tavily_multi_search
 from config import load_config
 from source_scoring import calculate_trust_score, deduplicate_sources
+from parallel_search import parallel_search, ParallelSearchError
 
 
 # Pass 1: System prompt for generating a high-quality initial draft
@@ -72,6 +74,7 @@ class AnswerEngine:
         self.conversation_history = []
         self.last_sources = []
         self.session_cache = {}
+        self.search_session_id = uuid.uuid4().hex
 
     def update_config(self, config):
         """Update engine config (e.g., after model/provider switch)."""
@@ -267,7 +270,17 @@ class AnswerEngine:
                       and self.config.get("tavily_api_key"))
         status(f"Searching: {resolved_query[:60]}...")
 
-        if use_tavily:
+        if self.config.get("search_provider") == "parallel":
+            try:
+                sources = parallel_search(
+                    resolved_query, queries=sub_queries or [resolved_query],
+                    num_results=8 if sub_queries else 5,
+                    max_content_chars=2000 if sub_queries else 2500,
+                    session_id=self.search_session_id,
+                )
+            except ParallelSearchError as error:
+                return {"answer": str(error), "sources": [], "mode": "error"}
+        elif use_tavily:
             tavily_key = self.config["tavily_api_key"]
             if sub_queries:
                 sources = tavily_multi_search(sub_queries, tavily_key, num_results_per=4, max_content_chars=2000)
@@ -334,3 +347,4 @@ class AnswerEngine:
         self.conversation_history = []
         self.last_sources = []
         self.session_cache = {}
+        self.search_session_id = uuid.uuid4().hex

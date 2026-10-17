@@ -25,7 +25,7 @@ OpenPlex gives you AI-powered answers grounded in real web results — with cita
 OpenPlex works like Perplexity Pro, but natively in your terminal:
 
 1. **Orchestration:** Analyzes your question to decide if it needs a search or just a chat response.
-2. **Multi-Source Search:** Searches the web via DuckDuckGo (default) or Tavily (optional) and fetches content from multiple pages in parallel.
+2. **Multi-Source Search:** Searches the web via DuckDuckGo (default), Tavily or Parallel (optional), using page content or search excerpts as sources.
 3. **Trust Ranking:** Scores and ranks sources based on domain authority and content quality.
 4. **Drafting:** Generates an initial answer with inline citations.
 5. **Verification (Deep Mode):** Cross-references the draft against sources to ensure absolute accuracy.
@@ -63,12 +63,25 @@ On first run, a setup wizard walks you through choosing a provider and entering 
 
 ## Search Backends
 
-OpenPlex supports two web search backends. DuckDuckGo requires no API key; Tavily is opt-in and delivers richer content out of the box.
+OpenPlex supports three web search backends. DuckDuckGo remains the default; Tavily and Parallel are opt-in.
 
 | Backend | API Key Required | How to Enable |
 |---|---|---|
 | **DuckDuckGo** (default) | No | Nothing — works out of the box |
 | **Tavily** | Yes — [app.tavily.com](https://app.tavily.com) | Set `TAVILY_API_KEY` + `OPENPLEX_SEARCH_PROVIDER=tavily` |
+| **Parallel** | No | Set `OPENPLEX_SEARCH_PROVIDER=parallel` |
+
+### Parallel Search MCP
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) provides free web search in Fast mode without a Parallel account or API key. It needs no extra Python packages. After installing OpenPlex, start it with:
+
+```bash
+OPENPLEX_SEARCH_PROVIDER=parallel python3 openplex.py
+```
+
+Keep your usual LLM provider and API key configured. Parallel supplies source excerpts to OpenPlex's existing ranking, citation and verification pipeline; it does not generate the answer. Deep mode sends related sub-queries in one search request. This backend uses search excerpts rather than fetching full pages.
+
+The anonymous service is intended for exploration and light use and has rate limits. If it is unavailable, OpenPlex reports an error without silently switching backends. To return to DuckDuckGo, set `OPENPLEX_SEARCH_PROVIDER=duckduckgo`.
 
 ---
 
@@ -143,7 +156,7 @@ export OPENPLEX_MODEL="models/gemini-2.5-flash"
 
 # Tavily search (optional)
 export TAVILY_API_KEY="tvly-..."
-export OPENPLEX_SEARCH_PROVIDER="tavily"   # or "duckduckgo" (default)
+export OPENPLEX_SEARCH_PROVIDER="tavily"   # or "parallel", "duckduckgo" (default)
 ```
 
 ---
@@ -158,7 +171,7 @@ export OPENPLEX_SEARCH_PROVIDER="tavily"   # or "duckduckgo" (default)
 | **Trust Engine** | ✅ | **✅** |
 | **Terminal Native** | ❌ | **✅** |
 | **BYO Model** | ❌ | **✅** |
-| **BYO Search Backend** | ❌ | **✅ (DDG or Tavily)** |
+| **BYO Search Backend** | ❌ | **✅ (DDG, Tavily or Parallel)** |
 
 ---
 
