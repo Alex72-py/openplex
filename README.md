@@ -12,6 +12,7 @@ OpenPlex gives you AI-powered answers grounded in real web results — with cita
 
 ## What's New
 
+- **Parallel Search Backend:** [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) is now an optional search provider alongside DuckDuckGo and Tavily. It needs no account or API key. Set `OPENPLEX_SEARCH_PROVIDER=parallel` to enable it.
 - **Tavily Search Backend:** Tavily is now supported as an optional, drop-in search provider alongside DuckDuckGo. Set `OPENPLEX_SEARCH_PROVIDER=tavily` and add your API key to get richer, AI-optimised web results with no extra scraping needed.
 - **Pass-through RAG (2-Step Verification):** Deep research mode now uses a dual-pass system. First, it drafts an answer, then a separate verification pass checks every claim against the sources to eliminate hallucinations.
 - **Source Trust Engine:** Heuristics-based scoring that prioritizes high-authority domains (Official docs, .gov, .edu) and detects primary sources.
